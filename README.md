@@ -1,2 +1,2 @@
 # Hetero-Bluefog
-Bluefog towards heterogeneous data
+Bluefog for heterogeneous data
