@@ -1,91 +1,18 @@
-import numpy as np
-
-from torchvision import datasets, transforms, models
 import torch
 import torch.distributed as dist
 import torch.optim as optim
 import torch.nn.functional as F
-import torch.nn as nn
 
 import bluefoglite.torch_api as bfl
-from bluefoglite.common import topology
-from bluefoglite.common.torch_backend import AsyncWork, BlueFogLiteGroup, ReduceOp
 from model import MLP
+from dataset import HeteroMNIST
 
-from utils import parse_args, broadcast_parameters, metric_average
+
+from utils import parse_args, broadcast_parameters
+
 
 bfl.init()
 
-class MLP(nn.Module):
-    def __init__(self):
-        super(MLP, self).__init__()
-        self.fc1 = nn.Linear(784, 256)
-        self.fc2 = nn.Linear(256, 10)
-        self.relu = nn.ReLU()
-        self.flatten = nn.Flatten()
-
-    def forward(self, x):
-        x = self.flatten(x)
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
-
-# Dataloader
-class HeteroMNIST(torch.utils.data.Dataset):
-    def __init__(self, args, root="./data/mnist/", num_clients=bfl.size(), partition="iid"):
-        self.root = root
-        self.num_clients = num_clients
-        self.partition = partition
-        self.generate_data()
-        
-    def generate_data(self):
-        self.train_dataset = datasets.MNIST(
-            root=self.root,
-            train=True,
-            download=True,
-            transform=transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-            ),
-        )
-        self.test_dataset = datasets.MNIST(
-            root=self.root,
-            train=False,
-            transform=transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-            ),
-        )
-        
-        if self.partition == "iid":
-            train_sampler = torch.utils.data.distributed.DistributedSampler(
-                self.train_dataset, num_replicas=bfl.size(), rank=bfl.rank()
-            )
-
-            test_sampler = torch.utils.data.distributed.DistributedSampler(
-                self.test_dataset, num_replicas=bfl.size(), rank=bfl.rank()
-            )
-            self.train_loader = torch.utils.data.DataLoader(
-                self.train_dataset, batch_size=args.batch_size, sampler=train_sampler
-            )
-            self.test_loader = torch.utils.data.DataLoader(
-                self.test_dataset, batch_size=args.batch_size, sampler=test_sampler
-            )
-        elif self.partition == "hetero":
-            pass
-        else:
-            raise ValueError("partition not supported")
-
-
-    def get_loader(self, split = "train"):
-        if split == "train":
-            return self.train_loader
-        elif split == "test":
-            return self.test_loader
-        else:
-            raise ValueError("split must be either train or test")
-
-   
-            
 class PSGDTrainer(object):
     def __init__(self, args, model, optimizer, dataset):
         self.model = model
@@ -150,7 +77,7 @@ class PSGDTrainer(object):
             total += len(target)
         test_loss /= total
         test_accuracy /= total
-        # Not need to average metric values across workers.
+        # No need to average metric values across workers.
         # test_loss = metric_average(test_loss)
         # test_accuracy = metric_average(test_accuracy)
         print(
@@ -174,7 +101,7 @@ if __name__ == "__main__":
         torch.manual_seed(args.seed)
     broadcast_parameters(model.state_dict(), root_rank=0)
     optimizer = optim.SGD(model.parameters(), lr=args.lr)
-    dataset = HeteroMNIST(args, root="./data/mnist/", num_clients=bfl.size(), partition="iid")
+    dataset = HeteroMNIST(args, root="./data/mnist/", num_clients=bfl.size(), rank=bfl.rank(), partition="iid")
     trainer = PSGDTrainer(args, model, optimizer, dataset)
     trainer.run()
     bfl.barrier()
